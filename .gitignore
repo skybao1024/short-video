@@ -1,0 +1,81 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.preview
+.env.production
+
+# Keep backend/.env symlink (not ignored)
+!backend/.env
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.claude/worktrees
+.codex/
+backend/celerybeat-schedule
+backend/celerybeat-schedule*
+.vite
+
+# Node
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+frontend/dist/
+frontend/coverage/
+frontend/.env.dev
+frontend/.env.prod
+frontend/.env.*.local
+
+frontend-backoffice/dist/
+frontend-backoffice/.env.dev
+frontend-backoffice/.env.prod
+frontend-backoffice/.env.*.local
+
+backend/logs/
+shell
+
+# Database
+*.db
+*.sqlite
+celerybeat-schedule.db
+celerybeat-schedule
+celerybeat-schedule*
+
+# Certificates
+*.pem
+*.key
+*.crt
+ssl/

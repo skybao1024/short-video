@@ -1,0 +1,64 @@
+name: scopeslab-api Prod Build And Publish
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy_region:
+        description: "Deploy region"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - eu
+          - sg
+      target_ref:
+        description: "Branch, tag, or commit to deploy"
+        required: true
+        default: "main"
+
+concurrency:
+  group: scopeslab-api-prod-${{ github.event_name == 'workflow_dispatch' && inputs.deploy_region || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: prod-eu
+            region: eu
+            runner_label: scopeslab-api-prod-eu
+          - target: prod-sg
+            region: sg
+            runner_label: scopeslab-api-prod-sg
+    runs-on: [self-hosted, "${{ matrix.runner_label }}"]
+    environment: ${{ matrix.target }}
+    steps:
+      - name: Checkout
+        if: >-
+          ${{
+            github.event_name == 'push' ||
+            inputs.deploy_region == 'all' ||
+            inputs.deploy_region == matrix.region
+          }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.ref }}
+
+      - name: Deploy
+        if: >-
+          ${{
+            github.event_name == 'push' ||
+            inputs.deploy_region == 'all' ||
+            inputs.deploy_region == matrix.region
+          }}
+        shell: bash
+        run: |
+          chmod +x scripts/deploy_api.sh
+          scripts/deploy_api.sh "${{ matrix.target }}"

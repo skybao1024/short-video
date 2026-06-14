@@ -1,0 +1,102 @@
+# Development overrides for docker-compose.yml
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    environment:
+      ENV: development
+      FRONTEND_URL: http://localhost:${FRONTEND_DEV_PORT:-3000}
+      AWS_ENDPOINT: http://minio:9000
+    volumes:
+      - ./backend:/app
+    command:
+      - uvicorn
+      - main:app
+      - --reload
+      - --reload-dir
+      - /app
+      - --reload-exclude
+      - logs/*
+      - --host
+      - 0.0.0.0
+      - --port
+      - ${API_PORT:-8001}
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    environment:
+      ENV: development
+      AWS_ENDPOINT: http://minio:9000
+    volumes:
+      - ./backend:/app
+    command:
+      - python
+      - scripts/dev_reload.py
+      - --watch
+      - app
+      - --watch
+      - migrations
+      - --watch
+      - celery_worker.py
+      - --
+      - celery
+      - -A
+      - app.core.celery_app
+      - worker
+      - --loglevel=info
+      - -Q
+      - celery,scheduled_tasks,video_generation
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    environment:
+      ENV: development
+      AWS_ENDPOINT: http://minio:9000
+    volumes:
+      - ./backend:/app
+    command:
+      - python
+      - scripts/dev_reload.py
+      - --watch
+      - app
+      - --watch
+      - migrations
+      - --
+      - celery
+      - -A
+      - app.core.celery_app
+      - beat
+      - --loglevel=info
+
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+
+  frontend:
+    command: >
+      sh -c "corepack enable &&
+      pnpm install --frozen-lockfile --prefer-offline &&
+      pnpm exec vite --mode dev --host 0.0.0.0 --port ${FRONTEND_DEV_PORT:-3000}"
+    environment:
+      FRONTEND_DEV_PORT: ${FRONTEND_DEV_PORT:-3000}
+      VITE_HMR_CLIENT_PORT: ${FRONTEND_DEV_PORT:-3000}
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8001/api}
+      VITE_USE_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+volumes:
+  frontend-node-modules:
+    driver: local

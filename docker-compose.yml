@@ -1,0 +1,335 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: ${PROJECT_NAME:-v-gen}-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-v_gen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-v_gen_password}
+      POSTGRES_DB: ${POSTGRES_DB:-v_gen}
+    ports:
+      - "127.0.0.1:${POSTGRES_EXTERNAL_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-v_gen} -d ${POSTGRES_DB:-v_gen}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    container_name: ${PROJECT_NAME:-v-gen}-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-v_gen_redis_password}
+    ports:
+      - "127.0.0.1:${REDIS_EXTERNAL_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "-a",
+          "${REDIS_PASSWORD:-v_gen_redis_password}",
+          "--raw",
+          "incr",
+          "ping",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:latest}
+    container_name: ${PROJECT_NAME:-v-gen}-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9002}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:9000/minio/health/live",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  minio-init:
+    image: ${MINIO_CLIENT_IMAGE:-minio/mc:latest}
+    container_name: ${PROJECT_NAME:-v-gen}-minio-init
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123} &&
+      mc mb --ignore-existing local/${AWS_BUCKET_NAME:-v-gen-dev}
+      "
+    networks:
+      - app-network
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME:-v-gen}-backend
+    restart: unless-stopped
+    environment:
+      ENV: ${ENV:-development}
+      API_PORT: ${API_PORT:-8001}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://v_gen:v_gen_password@postgres:5432/v_gen}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-v_gen_redis_password}
+      SECRET_KEY: ${SECRET_KEY:-local-development-secret-key-change-before-production}
+      FRONTEND_URL: http://localhost:${FRONTEND_DEV_PORT:-3000}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin123}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_BUCKET_NAME: ${AWS_BUCKET_NAME:-v-gen-dev}
+      AWS_ENDPOINT: ${AWS_ENDPOINT:-http://minio:9000}
+      AWS_ENDPOINT_PUBLIC: ${AWS_ENDPOINT_PUBLIC:-http://localhost:9002}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_API_BASE_URL: ${GEMINI_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+      RUNWAYML_API_SECRET: ${RUNWAYML_API_SECRET:-}
+      RUNWAY_API_BASE_URL: ${RUNWAY_API_BASE_URL:-https://api.dev.runwayml.com/v1}
+      RUNWAY_API_VERSION: ${RUNWAY_API_VERSION:-2024-11-06}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_STORYBOARD_MODEL: ${OPENAI_STORYBOARD_MODEL:-gpt-5.5}
+      OPENAI_STORYBOARD_TIMEOUT_SECONDS: ${OPENAI_STORYBOARD_TIMEOUT_SECONDS:-45}
+      OPENAI_IMAGE_ANALYSIS_MODEL: ${OPENAI_IMAGE_ANALYSIS_MODEL:-gpt-5.5}
+      OPENAI_IMAGE_ANALYSIS_DETAIL: ${OPENAI_IMAGE_ANALYSIS_DETAIL:-original}
+      OPENAI_IMAGE_ANALYSIS_TIMEOUT_SECONDS: ${OPENAI_IMAGE_ANALYSIS_TIMEOUT_SECONDS:-60}
+      VIDEO_PROVIDER_TIMEOUT_SECONDS: ${VIDEO_PROVIDER_TIMEOUT_SECONDS:-120}
+      VIDEO_PROVIDER_SUBMIT_MAX_RETRIES: ${VIDEO_PROVIDER_SUBMIT_MAX_RETRIES:-2}
+      VIDEO_PROVIDER_SUBMIT_RETRY_BACKOFF_SECONDS: ${VIDEO_PROVIDER_SUBMIT_RETRY_BACKOFF_SECONDS:-5}
+      VIDEO_PROVIDER_SUBMIT_RETRY_MAX_BACKOFF_SECONDS: ${VIDEO_PROVIDER_SUBMIT_RETRY_MAX_BACKOFF_SECONDS:-30}
+      VIDEO_PROVIDER_POLL_INTERVAL_SECONDS: ${VIDEO_PROVIDER_POLL_INTERVAL_SECONDS:-10}
+      VIDEO_PROVIDER_MAX_POLL_SECONDS: ${VIDEO_PROVIDER_MAX_POLL_SECONDS:-7200}
+    ports:
+      - "127.0.0.1:${API_PORT:-8001}:${API_PORT:-8001}"
+    volumes:
+      - ./backend/logs:/app/logs
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:${API_PORT:-8001}/api/v1/config/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME:-v-gen}-celery-worker
+    restart: unless-stopped
+    command: celery -A app.core.celery_app worker --loglevel=info -Q celery,scheduled_tasks,video_generation
+    environment:
+      ENV: ${ENV:-development}
+      API_PORT: ${API_PORT:-8001}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://v_gen:v_gen_password@postgres:5432/v_gen}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-v_gen_redis_password}
+      SECRET_KEY: ${SECRET_KEY:-local-development-secret-key-change-before-production}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin123}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_BUCKET_NAME: ${AWS_BUCKET_NAME:-v-gen-dev}
+      AWS_ENDPOINT: ${AWS_ENDPOINT:-http://minio:9000}
+      AWS_ENDPOINT_PUBLIC: ${AWS_ENDPOINT_PUBLIC:-http://localhost:9002}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_API_BASE_URL: ${GEMINI_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+      RUNWAYML_API_SECRET: ${RUNWAYML_API_SECRET:-}
+      RUNWAY_API_BASE_URL: ${RUNWAY_API_BASE_URL:-https://api.dev.runwayml.com/v1}
+      RUNWAY_API_VERSION: ${RUNWAY_API_VERSION:-2024-11-06}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_STORYBOARD_MODEL: ${OPENAI_STORYBOARD_MODEL:-gpt-5.5}
+      OPENAI_STORYBOARD_TIMEOUT_SECONDS: ${OPENAI_STORYBOARD_TIMEOUT_SECONDS:-45}
+      OPENAI_IMAGE_ANALYSIS_MODEL: ${OPENAI_IMAGE_ANALYSIS_MODEL:-gpt-5.5}
+      OPENAI_IMAGE_ANALYSIS_DETAIL: ${OPENAI_IMAGE_ANALYSIS_DETAIL:-original}
+      OPENAI_IMAGE_ANALYSIS_TIMEOUT_SECONDS: ${OPENAI_IMAGE_ANALYSIS_TIMEOUT_SECONDS:-60}
+      VIDEO_PROVIDER_TIMEOUT_SECONDS: ${VIDEO_PROVIDER_TIMEOUT_SECONDS:-120}
+      VIDEO_PROVIDER_SUBMIT_MAX_RETRIES: ${VIDEO_PROVIDER_SUBMIT_MAX_RETRIES:-2}
+      VIDEO_PROVIDER_SUBMIT_RETRY_BACKOFF_SECONDS: ${VIDEO_PROVIDER_SUBMIT_RETRY_BACKOFF_SECONDS:-5}
+      VIDEO_PROVIDER_SUBMIT_RETRY_MAX_BACKOFF_SECONDS: ${VIDEO_PROVIDER_SUBMIT_RETRY_MAX_BACKOFF_SECONDS:-30}
+      VIDEO_PROVIDER_POLL_INTERVAL_SECONDS: ${VIDEO_PROVIDER_POLL_INTERVAL_SECONDS:-10}
+      VIDEO_PROVIDER_MAX_POLL_SECONDS: ${VIDEO_PROVIDER_MAX_POLL_SECONDS:-7200}
+    volumes:
+      - ./backend/logs:/app/logs
+    networks:
+      - app-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+    healthcheck:
+      disable: true
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME:-v-gen}-celery-beat
+    restart: unless-stopped
+    command: celery -A app.core.celery_app beat --loglevel=info
+    environment:
+      ENV: ${ENV:-development}
+      API_PORT: ${API_PORT:-8001}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://v_gen:v_gen_password@postgres:5432/v_gen}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-v_gen_redis_password}
+      SECRET_KEY: ${SECRET_KEY:-local-development-secret-key-change-before-production}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin123}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_BUCKET_NAME: ${AWS_BUCKET_NAME:-v-gen-dev}
+      AWS_ENDPOINT: ${AWS_ENDPOINT:-http://minio:9000}
+      AWS_ENDPOINT_PUBLIC: ${AWS_ENDPOINT_PUBLIC:-http://localhost:9002}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_STORYBOARD_MODEL: ${OPENAI_STORYBOARD_MODEL:-gpt-5.5}
+      OPENAI_STORYBOARD_TIMEOUT_SECONDS: ${OPENAI_STORYBOARD_TIMEOUT_SECONDS:-45}
+      OPENAI_IMAGE_ANALYSIS_MODEL: ${OPENAI_IMAGE_ANALYSIS_MODEL:-gpt-5.5}
+      OPENAI_IMAGE_ANALYSIS_DETAIL: ${OPENAI_IMAGE_ANALYSIS_DETAIL:-original}
+      OPENAI_IMAGE_ANALYSIS_TIMEOUT_SECONDS: ${OPENAI_IMAGE_ANALYSIS_TIMEOUT_SECONDS:-60}
+    volumes:
+      - ./backend/logs:/app/logs
+    networks:
+      - app-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+    healthcheck:
+      disable: true
+
+  frontend:
+    image: ${NODE_IMAGE:-node:20-alpine}
+    container_name: ${PROJECT_NAME:-v-gen}-frontend
+    restart: unless-stopped
+    working_dir: /app
+    command: >
+      sh -c "corepack enable &&
+      pnpm install --frozen-lockfile &&
+      pnpm exec vite --mode dev --host 0.0.0.0 --port ${FRONTEND_DEV_PORT:-3000}"
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8001/api}
+    ports:
+      - "127.0.0.1:${FRONTEND_DEV_PORT:-3000}:${FRONTEND_DEV_PORT:-3000}"
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-T",
+          "5",
+          "--spider",
+          "http://127.0.0.1:${FRONTEND_DEV_PORT:-3000}",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME:-v-gen}-flower
+    restart: unless-stopped
+    command: celery -A app.core.celery_app flower --port=5555 --basic-auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-changeme}
+    environment:
+      ENV: ${ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://v_gen:v_gen_password@postgres:5432/v_gen}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-v_gen_redis_password}
+      SECRET_KEY: ${SECRET_KEY:-local-development-secret-key-change-before-production}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin123}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_BUCKET_NAME: ${AWS_BUCKET_NAME:-v-gen-dev}
+      AWS_ENDPOINT: ${AWS_ENDPOINT:-http://minio:9000}
+      AWS_ENDPOINT_PUBLIC: ${AWS_ENDPOINT_PUBLIC:-http://localhost:9002}
+    ports:
+      - "127.0.0.1:${FLOWER_PORT:-5555}:5555"
+    networks:
+      - app-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery-worker:
+        condition: service_started
+    profiles:
+      - monitoring
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  minio-data:
+    driver: local
+  frontend-node-modules:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
